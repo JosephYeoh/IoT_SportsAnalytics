@@ -27,6 +27,10 @@
  *
  */
 
+/*
+ * Corner
+ */
+
 #include "contiki.h"
 #include "contiki-lib.h"
 #include "contiki-net.h"
@@ -38,7 +42,7 @@
 #define DEBUG DEBUG_PRINT
 #include "net/ip/uip-debug.h"
 
-#define SEND_INTERVAL		15 * CLOCK_SECOND
+#define SEND_INTERVAL		2 * CLOCK_SECOND
 #define MAX_PAYLOAD_LEN		40
 
 static struct uip_udp_conn *client_conn;
@@ -46,33 +50,66 @@ static struct uip_udp_conn *client_conn;
 PROCESS(udp_client_process, "UDP client process");
 AUTOSTART_PROCESSES(&resolv_process,&udp_client_process);
 /*---------------------------------------------------------------------------*/
+
+clock_time_t sent_time;
+clock_time_t received_time;
+static struct timer t;
+static struct etimer et;
+
+/* Handles received signal */
 static void
-tcpip_handler(void)
+tcpip_handler()
 {
   char *str;
 
   if(uip_newdata()) {
+
+    // Received response from ball (server)
     str = uip_appdata;
     str[uip_datalen()] = '\0';
-    printf("Response from the server: '%s' RSSI: %d\n\r", str, (signed short)packetbuf_attr(PACKETBUF_ATTR_RSSI));
+
+    // Print response from ball (server)
+    received_time = timer_remaining(&t);
+    printf("Received response from server: '%s'\r\n", str);
+    printf("Received on: %lu\r\n", received_time);
+
+    // Print time difference
+    printf("Time difference: %lu out of %d in a second\r\n\r\n\r\n",
+            sent_time - received_time,
+            CLOCK_SECOND
+            );
   }
 }
 /*---------------------------------------------------------------------------*/
+
+/* Periodically sends out signals to ball (server) */
 static char buf[MAX_PAYLOAD_LEN];
 static void
 timeout_handler(void)
 {
-  static int seq_id;
+    static int seq_id;
 
-  printf("Client sending to: ");
-  PRINT6ADDR(&client_conn->ripaddr);
-  sprintf(buf, "Hello %d from the client", ++seq_id);
-  printf(" (msg: %s)\n\r", buf);
+    printf("Corner (client) sending to: ");
+    PRINT6ADDR(&client_conn->ripaddr);
+    printf("\r\n");
+
+    // Preparing information to send
+    timer_set(&t, SEND_INTERVAL);
+    sent_time = timer_remaining(&t);
+    sprintf(buf, 
+            "ID: %d Sent_time: %lu",
+            ++seq_id,
+            sent_time
+            );
+    printf("Message sent: %s\r\n", buf);
+
+    // Sending packets
 #if SEND_TOO_LARGE_PACKET_TO_TEST_FRAGMENTATION
-  uip_udp_packet_send(client_conn, buf, UIP_APPDATA_SIZE);
-#else /* SEND_TOO_LARGE_PACKET_TO_TEST_FRAGMENTATION */
-  uip_udp_packet_send(client_conn, buf, strlen(buf));
+    uip_udp_packet_send(client_conn, buf, UIP_APPDATA_SIZE);
+#else  SEND_TOO_LARGE_PACKET_TO_TEST_FRAGMENTATION 
+    uip_udp_packet_send(client_conn, buf, strlen(buf));
 #endif /* SEND_TOO_LARGE_PACKET_TO_TEST_FRAGMENTATION */
+
 }
 /*---------------------------------------------------------------------------*/
 static void
@@ -147,7 +184,6 @@ set_connection_address(uip_ipaddr_t *ipaddr)
 /*---------------------------------------------------------------------------*/
 PROCESS_THREAD(udp_client_process, ev, data)
 {
-  static struct etimer et;
   uip_ipaddr_t ipaddr;
 
   PROCESS_BEGIN();
@@ -181,19 +217,19 @@ PROCESS_THREAD(udp_client_process, ev, data)
 	UIP_HTONS(client_conn->lport), UIP_HTONS(client_conn->rport));
 
   etimer_set(&et, SEND_INTERVAL);
-
+  // ctimer_set(&ct, SEND_INTERVAL, timeout_handler, NULL);
   
   while(1) {
     PROCESS_YIELD();
-  
+
+    if (ev == tcpip_event) {
+        tcpip_handler();
+    }
+
 	//Wait for timer to expire
 	if(etimer_expired(&et)) {
       timeout_handler();
       etimer_restart(&et);
-
-	//Check for TCPIP event
-    } else if(ev == tcpip_event) {
-      tcpip_handler();
     }
   }
 
